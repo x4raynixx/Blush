@@ -7,7 +7,7 @@ Visit https://getblush.xyz/, and follow the instructions to download the Blush i
 ```git
 git clone https://github.com/x4raynixx/Blush
 cd Blush
-pip install -r requirements
+pip install -r requirements.txt
 ```
 
 And finally run the command from build.txt
