@@ -5,6 +5,7 @@ from pathlib import Path
 import platform
 from utils import fetcher
 import shlex
+import subprocess
 
 importlist = [
     "colorama",
@@ -45,7 +46,7 @@ def get_prefixes():
         "blush_prefix": pad_emoji_prefix("[🍀]"),
         "success_prefix": pad_emoji_prefix("[»]" + col.Fore.GREEN),
         "warning_prefix": pad_emoji_prefix("[ ]" + col.Fore.YELLOW),
-        "error_prefix": pad_emoji_prefix("[❌]"),
+        "error_prefix": pad_emoji_prefix("[]" + col.Fore.RED),
         "think_prefix": pad_emoji_prefix("[⏳]"),
         "cin_prefix": pad_emoji_prefix("[»]")
     }
@@ -149,7 +150,20 @@ def doinput():
             break
 
 def execute(cmd):
-    import shlex
+    if cmd and cmd[0] == "!":
+        mod_cmd = cmd[1:]  # Usuń pierwszy znak '!'
+        args = shlex.split(mod_cmd)  # Rozbij na listę (np. 'ls -la' -> ['ls', '-la'])
+        
+        if not args:
+            return f"${error_prefix} No command provided!"
+
+        result = subprocess.run(mod_cmd, shell=True, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            return print(result.stdout)
+        else:
+            return f"${error_prefix} {result.stderr.strip()}"
+        
     col = globals().get("colorama")
 
     args = shlex.split(cmd)
@@ -171,7 +185,9 @@ def execute(cmd):
     if len(response) == 1:
         return print(f"{success_prefix} Done")
     if len(response) >= 2:
-        return print(f"{success_prefix} Failed: {response[1]}")
+        col = globals().get("colorama")
+        col.init()
+        return print(error_prefix + f" Failed: {response[1]}")
     
     if response == "$C_CLEAR":
         clear_terminal()

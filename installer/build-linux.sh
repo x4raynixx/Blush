@@ -1,0 +1,21 @@
+python3 -m nuitka \
+  --standalone \
+  --onefile \
+  --enable-plugin=pylint-warnings \
+  --enable-plugin=pyside6 \
+  --output-dir=build \
+  --remove-output \
+  --nofollow-import-to=pip \
+  --include-module=colorama \
+  --include-module=wcwidth \
+  --include-module=requests \
+  --include-module=urllib3 \
+  --include-module=charset_normalizer \
+  --include-module=idna \
+  --include-module=certifi \
+  --include-module=shiboken6 \
+  --include-module=PySide6 \
+  --linux-icon=blush.ico \
+  --output-filename=blush-installer \
+  --include-data-dir="/mnt/d/Codes/tests/Blush/venv/lib64/python3.12/site-packages/PySide6/Qt/plugins=PySide6/plugins" \
+  installer.py
