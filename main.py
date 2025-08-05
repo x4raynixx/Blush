@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 import platform
 from utils import fetcher
+import shlex
 
 importlist = [
     "colorama",
@@ -143,21 +144,39 @@ def doinput():
             current_input = input(get_blush_color() + f"{cin_prefix} ")
             if current_input == "":
                 continue
-            response = execute(current_input)
+            execute(current_input)
         except KeyboardInterrupt:
             break
 
 def execute(cmd):
+    import shlex
     col = globals().get("colorama")
-    checker = fetcher.ifexists(cmd)
-    if checker == False:
+
+    args = shlex.split(cmd)
+    if not args:
+        return
+
+    command = args[0]
+    arguments = args[1:] if len(args) > 1 else []
+
+    checker = fetcher.ifexists(command)
+    if not checker:
         print(f"{warning_prefix} Error: Command not found")
-    if checker == True:
-        response = fetcher.execute(cmd)
-        if response == "$C_CLEAR":
-            clear_terminal()
-        elif response != "$C_CLEAR":
-            print(success_prefix + " " + response)
+        return
+    
+    full_args = [command] + arguments
+
+    response = fetcher.execute(full_args)
+
+    if len(response) == 1:
+        return print(f"{success_prefix} Done")
+    if len(response) >= 2:
+        return print(f"{success_prefix} Failed: {response[1]}")
+    
+    if response == "$C_CLEAR":
+        clear_terminal()
+    elif response != "$C_CLEAR":
+        print(success_prefix + " " + response)
 
 def get_blush_color():
     col = globals().get("colorama")

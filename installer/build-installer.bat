@@ -1,0 +1,23 @@
+python -m nuitka ^
+  --standalone ^
+  --onefile ^
+  --enable-plugin=pylint-warnings ^
+  --enable-plugin=pyside6 ^
+  --output-dir=build ^
+  --remove-output ^
+  --msvc=latest ^
+  --windows-icon-from-ico=blush.ico ^
+  --nofollow-import-to=pip ^
+  --include-module=colorama ^
+  --include-module=wcwidth ^
+  --include-module=requests ^
+  --include-module=urllib3 ^
+  --include-module=charset_normalizer ^
+  --include-module=idna ^
+  --include-module=certifi ^
+  --include-module=shiboken6 ^
+  --include-module=PySide6 ^
+  --output-filename=blush-installer.exe ^
+  --windows-console-mode=disable ^
+  --include-data-dir=C:\Users\ytkey\AppData\Local\Programs\Python\Python313\Lib\site-packages\PySide6\plugins=PySide6/plugins ^
+  installer.py

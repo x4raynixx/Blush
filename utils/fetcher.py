@@ -1,7 +1,10 @@
+from .commands import cls, clear, mkdir, rmdir
+
 command_list = [
     "mkdir",
     "clear",
-    "cls"
+    "cls",
+    "rmdir"
 ]
 
 def ifexists(input):
@@ -11,11 +14,13 @@ def ifexists(input):
         return False
     
 def execute(cmd):
-    if ifexists(cmd) == False:
+    if ifexists(cmd[0]) == False:
         return "NOT_EXIST"
-    if cmd.lower() == "mkdir":
-        return "Created"
-    elif cmd.lower() == "clear":
-        return "$C_CLEAR"
-    elif cmd.lower() == "cls":
-        return "$C_CLEAR"
+    if cmd[0].lower() == "mkdir":
+        return mkdir.run(cmd)
+    elif cmd[0].lower() == "clear":
+        return clear.run(cmd)
+    elif cmd[0].lower() == "cls":
+        return cls.run(cmd)
+    elif cmd[0].lower() == "rmdir":
+        return rmdir.run(cmd)
