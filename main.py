@@ -151,8 +151,8 @@ def doinput():
 
 def execute(cmd):
     if cmd and cmd[0] == "!":
-        mod_cmd = cmd[1:]  # Usuń pierwszy znak '!'
-        args = shlex.split(mod_cmd)  # Rozbij na listę (np. 'ls -la' -> ['ls', '-la'])
+        mod_cmd = cmd[1:]
+        args = shlex.split(mod_cmd)
         
         if not args:
             return f"${error_prefix} No command provided!"
@@ -182,16 +182,19 @@ def execute(cmd):
 
     response = fetcher.execute(full_args)
 
-    if len(response) == 1:
-        return print(f"{success_prefix} Done")
-    if len(response) >= 2:
-        col = globals().get("colorama")
-        col.init()
-        return print(error_prefix + f" Failed: {response[1]}")
-    
     if response == "$C_CLEAR":
         clear_terminal()
-    elif response != "$C_CLEAR":
+        return
+    
+    if isinstance(response, list):
+        if len(response) == 1:
+            return print(f"{success_prefix} Done")
+        if len(response) >= 2:
+            col = globals().get("colorama")
+            col.init()
+            return print(error_prefix + f" Failed: {response[1]}")
+
+    if isinstance(response, str):
         print(success_prefix + " " + response)
 
 def get_blush_color():
