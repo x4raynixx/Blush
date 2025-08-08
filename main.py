@@ -3,83 +3,43 @@ import subprocess
 import sys
 from pathlib import Path
 import platform
-from utils import fetcher
 import shlex
 import json
-import time
 
-# auto-install list
-importlist = ["colorama", "pathlib", "wcwidth", "prompt_toolkit"]
+# Local imports
+from utils import fetcher
+from utils.settings import load_full_config, ensure_config, get_blush_paths
+from utils.colors import get_color
+
+# auto-install list (kept minimal and cross-platform)
+importlist = ["colorama", "wcwidth", "prompt_toolkit", "psutil"]
 
 def clear_terminal():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def get_blush_path():
-    system = platform.system()
-    if system == "Windows":
-        return Path(os.environ.get("USERPROFILE")) / "AppData" / "Local" / ".blush"
-    elif system in ["Linux", "Darwin"]:
-        return Path(os.environ.get("HOME")) / ".blush"
-    else:
-        raise Exception("Unsupported OS")
-
-BLUSH_PATH = get_blush_path()
-TEMP_PATH = BLUSH_PATH / "temp"
-BLUSH_CONFIG_PATH = BLUSH_PATH / "config.json"
+BLUSH_PATHS = get_blush_paths()
+BLUSH_PATH = BLUSH_PATHS["root"]
+TEMP_PATH = BLUSH_PATHS["temp"]
+BLUSH_CONFIG_PATH = BLUSH_PATHS["config"]
 RESTART_SCRIPT = TEMP_PATH / ("restart.bat" if os.name == "nt" else "restart.sh")
-
-def load_config(config_type):
-    if BLUSH_CONFIG_PATH.exists():
-        try:
-            with open(BLUSH_CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-                return config.get(config_type, "MAGENTA")
-        except:
-            pass
-    return "MAGENTA"
-
-def get_prefixes():
-    import wcwidth
-    col = globals().get("colorama")
-
-    def pad_display(text, width=2):
-        w = sum(wcwidth.wcwidth(c) or 0 for c in text)
-        return text + " " * max(0, width - w)
-
-    def colorize(color, text):
-        return color + text + col.Style.RESET_ALL
-
-    base = {
-        "blush": "[🍀]",
-        "success": "[✓]",
-        "warning": "[!]",
-        "error": "[✗]",
-        "think": "[⏳]",
-        "cin": "[»]",
-    }
-
-    return {
-        "blush_prefix": pad_display(base["blush"]),
-        "success_prefix": colorize(col.Fore.GREEN, pad_display(base["success"])),
-        "warning_prefix": colorize(col.Fore.YELLOW, pad_display(base["warning"])),
-        "error_prefix": colorize(col.Fore.RED, pad_display(base["error"])),
-        "think_prefix": pad_display(base["think"]),
-        "cin_prefix": pad_display(base["cin"]),
-    }
 
 def delete_restart_script():
     if RESTART_SCRIPT.exists():
         RESTART_SCRIPT.unlink()
 
 def prepare():
+    # Ensure temp and config exist
     os.makedirs(TEMP_PATH, exist_ok=True)
+    ensure_config(BLUSH_CONFIG_PATH)
     delete_restart_script()
+
     missing_modules = []
     for module in importlist:
         try:
             globals()[module] = __import__(module)
         except ImportError:
             missing_modules.append(module)
+
     if missing_modules:
         print("[*] Missing modules: " + ", ".join(missing_modules))
         for module in missing_modules:
@@ -89,9 +49,10 @@ def prepare():
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 globals()[module] = __import__(module)
                 print(f"[+] {module} installed")
-            except:
-                print(f"[!] Failed to install {module}.")
+            except Exception as e:
+                print(f"[!] Failed to install {module}: {e}")
                 sys.exit(1)
+
         restart_content = (
             f"@echo off\ntimeout /t 1 >nul\n\"{sys.executable}\" \"{__file__}\"\ndel \"%~f0\"\n"
             if os.name == "nt" else
@@ -104,14 +65,6 @@ def prepare():
         else:
             os.startfile(RESTART_SCRIPT)
         sys.exit(0)
-    col = globals().get("colorama")
-    if not BLUSH_PATH.exists():
-        print(col.Fore.YELLOW + "[⏳] Preparing")
-        os.makedirs(BLUSH_PATH, exist_ok=True)
-        BLUSH_CONFIG_PATH.write_text('{"blush_color": "MAGENTA"}')
-        clear_terminal()
-    if not BLUSH_CONFIG_PATH.exists():
-        BLUSH_CONFIG_PATH.write_text('{"blush_color": "MAGENTA"}')
 
 load_banner = r"""$$$$$$$\  $$\       $$\   $$\  $$$$$$\  $$\   $$\
 $$  __$$\ $$ |      $$ |  $$ |$$  __$$\ $$ |  $$ |
@@ -124,12 +77,18 @@ $$ |  $$ |$$$$$$$$\ \$$$$$$  |$$ |  $$ |$$ |  $$ |
 
 def display_banner():
     col = globals().get("colorama")
-    blush_color = get_blush_color()
+    cfg = load_full_config(BLUSH_CONFIG_PATH)
+    colors = {
+        "blush": get_color(cfg.get("blush_color", "MAGENTA")),
+        "success": get_color(cfg.get("success_color", "GREEN")),
+        "warning": get_color(cfg.get("warning_color", "YELLOW")),
+        "error": get_color(cfg.get("error_color", "RED")),
+    }
     for line in load_banner.splitlines():
-        print(blush_color + line + col.Style.RESET_ALL)
+        print(colors["blush"] + line + col.Style.RESET_ALL)
     print("")
-    print(col.Fore.GREEN + f"{success_prefix}"+ col.Fore.GREEN + " All modules loaded" + col.Style.RESET_ALL)
-    print(col.Fore.BLUE + f"{blush_prefix} Blush - Fast & Optimized Shell" + col.Style.RESET_ALL)
+    print(colors["success"] + f"{success_prefix} All modules loaded" + col.Style.RESET_ALL)
+    print(get_color("BLUE") + f"{blush_prefix} Blush - Fast & Optimized Shell" + col.Style.RESET_ALL)
     print("")
 
 # simple sentence-capitalizer per line
@@ -143,60 +102,8 @@ def _format_lines(text: str) -> str:
             out.append(ln)
     return "\n".join(out)
 
-# tab completion
 def _build_flags_map():
-    return {
-        "ls": ["-a", "--all", "-l", "--long", "-h", "--human", "-R", "--recursive", "-1", "-t", "-S", "--include=", "--exclude="],
-        "grep": ["-i", "-n", "-r", "-E"],
-        "find": ["-name", "-type", "f", "d", "-maxdepth"],
-        "cp": ["-r", "-n", "-u"],
-        "mv": ["-n", "-f"],
-        "rm": ["-r", "-f", "-i", "-v"],
-        "chmod": ["-R"],
-        "head": ["-n"],
-        "tail": ["-n", "-f"],
-        "du": ["--max-depth"],
-        "tree": ["--include=", "--exclude=", "--max-depth="],
-        "ping": ["-c"],
-        "curl": ["-o"],
-        "wget": [],
-        "mkdir": ["-m"],
-        "touch": ["-c", "-m"],
-        "date": ["+%Y-%m-%d %H:%M:%S"],
-        "history": ["-n", "-c"],
-        "json": ["--get", "--set", "--pretty"],
-        "replace": ["--regex", "--in-place"],
-        "sort": ["-r", "-n", "-u"],
-        "uniq": ["-c"],
-        "split": ["-l"],
-        "base64": ["encode", "decode"],
-        "b64": ["encode", "decode"],
-        "checksum": ["--algo", "md5", "sha1", "sha256"],
-        "killall": [],
-        "pkill": [],
-        "zip": [],
-        "unzip": [],
-        "tar": [],
-        "untar": [],
-        "seq": [],
-        "calc": [],
-        "stat": [],
-        "basename": [],
-        "dirname": [],
-        "free": [],
-        "uptime": [],
-        "hostname": [],
-        "ip": [],
-        "netstat": [],
-        "dns": [],
-        "nslookup": [],
-        "alias": [],
-        "unalias": [],
-        "which": [],
-        "export": [],
-        "unset": [],
-        "env": []
-    }
+    return fetcher.get_flags_map()
 
 def _iter_path_completions(prefix: str):
     base = prefix or ""
@@ -223,9 +130,9 @@ def _get_alias_names():
         return []
 
 def _tokenize_for_complete(text: str):
+    import shlex as _sh
     try:
-        # keep an unfinished token at end
-        lexer = shlex.shlex(text, posix=True)
+        lexer = _sh.shlex(text, posix=True)
         lexer.whitespace_split = True
         tokens = list(lexer)
         ends_with_space = text.endswith(" ")
@@ -251,38 +158,20 @@ def input_loop():
             cmds = fetcher.command_list[:]
             cmds += _get_alias_names()
 
-            # first word -> command names
             if len(tokens) == 0 or (len(tokens) == 1 and not ends_with_space):
                 for c in cmds:
                     if c.startswith(prefix):
                         yield Completion(c, start_position=-len(prefix))
                 return
 
-            # determine current command
             cmd = tokens[0].lower()
             is_flag_context = prefix.startswith("-")
-            # offer flags for known commands
             if is_flag_context:
                 for fl in self.flags.get(cmd, []):
                     if fl.startswith(prefix):
                         yield Completion(fl, start_position=-len(prefix))
                 return
 
-            # special positional words
-            specials = {
-                "base64": ["encode", "decode"],
-                "b64": ["encode", "decode"],
-                "checksum": ["--algo", "md5", "sha1", "sha256"],
-                "find": ["-name", "-type", "f", "d", "-maxdepth"],
-                "json": ["--get", "--set", "--pretty"],
-                "replace": ["--regex", "--in-place"]
-            }
-            if cmd in specials:
-                for w in specials[cmd]:
-                    if w.startswith(prefix):
-                        yield Completion(w, start_position=-len(prefix))
-
-            # fallback to filesystem suggestions
             for p in _iter_path_completions(prefix):
                 yield Completion(p, start_position=-len(prefix))
 
@@ -328,10 +217,10 @@ def execute_command(cmd):
     command = args[0].lower()
     arguments = args[1:]
     if not fetcher.ifexists(command):
-        print(col.Fore.YELLOW + f"{warning_prefix}" + col.Fore.YELLOW + f" Command '{command}' not found")
+        print(get_color("YELLOW") + f"{warning_prefix} Command '{command}' not found")
         suggestions = fetcher.get_similar_commands(command)
         if suggestions:
-            print(col.Fore.YELLOW + f"{warning_prefix}" + col.Fore.YELLOW + f" Did you mean: {', '.join(suggestions)}?")
+            print(get_color("YELLOW") + f"{warning_prefix} Did you mean: {', '.join(suggestions)}?")
         return
     try:
         response = fetcher.execute([command] + arguments)
@@ -340,7 +229,6 @@ def execute_command(cmd):
         print(f"{error_prefix} Error executing command: {str(e)}")
 
 def handle_response(response):
-    col = globals().get("colorama")
     if response == "$C_CLEAR":
         clear_terminal()
     elif response == "$C_EXIT":
@@ -349,20 +237,43 @@ def handle_response(response):
         if len(response) == 1 and response[0] == "SUCCESS":
             print(f"{success_prefix} Done")
         elif len(response) >= 2 and response[0] == "ERROR":
-            print(f"{error_prefix} {_format_lines(response[1])}")
+            print(f"{error_prefix} {response[1]}")
         elif len(response) >= 2 and response[0] == "WARNING":
-            print(f"{warning_prefix} {_format_lines(response[1])}")
+            print(f"{warning_prefix} {response[1]}")
         elif len(response) >= 2 and response[0] == "INFO":
-            print(f"{blush_prefix} {_format_lines(response[1])}")
+            print(f"{blush_prefix} {response[1]}")
     elif isinstance(response, str) and response:
-        print(f"{success_prefix} {_format_lines(response)}")
+        print(f"{success_prefix} {response}")
 
-def get_blush_color():
+def get_prefixes():
+    import wcwidth
     col = globals().get("colorama")
-    if col is None:
-        return ""
-    color_name = load_config("blush_color")
-    return getattr(col.Fore, color_name, col.Fore.MAGENTA)
+    cfg = load_full_config(BLUSH_CONFIG_PATH)
+
+    def pad_display(text, width=2):
+        w = sum(wcwidth.wcwidth(c) or 0 for c in text)
+        return text + " " * max(0, width - w)
+
+    def colorize(color_name, text):
+        return get_color(color_name) + text + col.Style.RESET_ALL
+
+    base = {
+        "blush": "[🍀]",
+        "success": "[✓]",
+        "warning": "[!]",
+        "error": "[✗]",
+        "think": "[⏳]",
+        "cin": "[»]",
+    }
+
+    return {
+        "blush_prefix": pad_display(base["blush"]),
+        "success_prefix": colorize(cfg.get("success_color", "GREEN"), pad_display(base["success"])),
+        "warning_prefix": colorize(cfg.get("warning_color", "YELLOW"), pad_display(base["warning"])),
+        "error_prefix": colorize(cfg.get("error_color", "RED"), pad_display(base["error"])),
+        "think_prefix": pad_display(base["think"]),
+        "cin_prefix": pad_display(base["cin"]),
+    }
 
 def main():
     prepare()

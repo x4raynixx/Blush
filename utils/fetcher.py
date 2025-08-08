@@ -1,7 +1,24 @@
-from .commands.cmd import *
+from __future__ import annotations
+# Combined registry: keep all existing commands and add new ones non-destructively.
+
 import difflib
 import shlex
 
+# Import original commands
+from .commands.cmd import *  # noqa: F401,F403
+
+# Import blush-specific additions and extras
+from .commands.blush import (
+    BLUSH_COMMANDS,
+    EXTRA_COMMANDS,
+    blush as blush_cmd,
+    blush_settings as blush_settings_cmd,
+    blush_transfer as blush_transfer_cmd,
+    blush_connect as blush_connect_cmd,
+    extra as extra_cmd_handler,
+)
+
+# Base command list from original file (kept intact)
 command_list = [
     "mkdir", "clear", "cls", "rmdir", "ls", "dir", "cd", "pwd", "cat", "type",
     "echo", "touch", "cp", "copy", "mv", "move", "rm", "del", "find", "grep",
@@ -15,6 +32,9 @@ command_list = [
     "dns", "nslookup"
 ]
 
+# Add new blush commands and 100+ extra ones
+command_list += BLUSH_COMMANDS + EXTRA_COMMANDS
+
 def ifexists(input_cmd):
     if input_cmd.lower() in command_list:
         return True
@@ -25,6 +45,19 @@ def get_similar_commands(input_cmd):
     matches = difflib.get_close_matches(input_cmd.lower(), command_list, n=5, cutoff=0.6)
     return matches
 
+def get_flags_map():
+    # Provide completion flags for new commands
+    return {
+        "ls": ["-a","-l","-h","-R","-1","-t","-S","--include=","--exclude="],
+        "grep": ["-i","-n","-r","-E"],
+        "blush": ["set", "connect", "transfer", "status", "host", "select"],
+        "blush-transfer": ["--to=", "--ip=", "--port="],
+        "blush-connect": ["select"],
+        "zip": [],
+        "tar": [],
+        "curl": ["-o"],
+    }
+
 def execute(cmd):
     if not cmd:
         return ["ERROR", "Command not found"]
@@ -34,6 +67,8 @@ def execute(cmd):
     command = cmd[0].lower()
     if not ifexists(command):
         return ["ERROR", "Command not found"]
+
+    # Original mapping
     command_map = {
         "mkdir": mkdir.run,
         "clear": clear.run,
@@ -113,8 +148,18 @@ def execute(cmd):
         "ip": ip.run,
         "netstat": netstat.run,
         "dns": dns.run,
-        "nslookup": nslookup.run
+        "nslookup": nslookup.run,
+        # New blush commands
+        "blush": blush_cmd.run,
+        "blush-settings": blush_settings_cmd.run,
+        "blush-transfer": blush_transfer_cmd.run,
+        "blush-connect": blush_connect_cmd.run,
     }
+
+    # Map all extra command names to a single handler
+    for name in EXTRA_COMMANDS:
+        command_map[name] = extra_cmd_handler.run
+
     handler = command_map.get(command)
     if handler:
         return handler(cmd)
