@@ -70,7 +70,7 @@ class alias:
     def run(args):
         if len(args) == 1:
             if not ALIASES:
-                return ["INFO", "No aliases"]
+                return ["INFO", "no aliases"]
             out = []
             for k in sorted(ALIASES.keys()):
                 out.append(f"{k}='{ALIASES[k]}'")
@@ -78,12 +78,12 @@ class alias:
         # naive parser: alias name=command...
         for spec in args[1:]:
             if "=" not in spec:
-                return ["ERROR", "Use alias name=command"]
+                return ["ERROR", "use alias name=command"]
             name, val = spec.split("=", 1)
             name = name.strip()
             val = val.strip().strip("'").strip('"')
             if not name:
-                return ["ERROR", "Invalid alias name"]
+                return ["ERROR", "invalid alias name"]
             ALIASES[name] = val
         return ["SUCCESS"]
 
@@ -98,7 +98,7 @@ class unalias:
                 del ALIASES[a]
                 removed.append(a)
         if not removed:
-            return ["WARNING", "No aliases removed"]
+            return ["WARNING", "no aliases removed"]
         return ["SUCCESS"]
 
 class mkdir:
@@ -115,7 +115,7 @@ class mkdir:
                 try:
                     mode = int(args[i + 1], 8)
                 except:
-                    return ["ERROR", "Invalid mode"]
+                    return ["ERROR", "invalid mode"]
                 i += 2
             else:
                 paths.append(args[i])
@@ -386,9 +386,9 @@ class cp:
                 return ["ERROR", f"Source '{src}' does not exist"]
             if os.path.isdir(src):
                 if not recursive:
-                    return ["ERROR", "Use -r to copy directories"]
+                    return ["ERROR", "use -r to copy directories"]
                 if os.path.exists(dst) and noclobber:
-                    return ["WARNING", "Destination exists, skipped"]
+                    return ["WARNING", "destination exists, skipped"]
                 if os.path.exists(dst):
                     shutil.rmtree(dst)
                 shutil.copytree(src, dst)
@@ -396,10 +396,10 @@ class cp:
                 if os.path.isdir(dst):
                     dst = os.path.join(dst, os.path.basename(src))
                 if os.path.exists(dst) and noclobber:
-                    return ["WARNING", "Destination exists, skipped"]
+                    return ["WARNING", "destination exists, skipped"]
                 if update_only and os.path.exists(dst):
                     if os.path.getmtime(dst) >= os.path.getmtime(src):
-                        return ["WARNING", "Destination newer or same, skipped"]
+                        return ["WARNING", "destination newer or same, skipped"]
                 shutil.copy2(src, dst)
             return ["SUCCESS"]
         except Exception as e:
@@ -419,7 +419,7 @@ class mv:
             if not os.path.exists(src):
                 return ["ERROR", f"Source '{src}' does not exist"]
             if os.path.exists(dst) and noclobber and not force:
-                return ["WARNING", "Destination exists, skipped"]
+                return ["WARNING", "destination exists, skipped"]
             shutil.move(src, dst)
             return ["SUCCESS"]
         except Exception as e:
@@ -436,6 +436,7 @@ class rm:
         interactive = "-i" in args
         verbose = "-v" in args
         files = [arg for arg in args[1:] if not arg.startswith('-')]
+        msgs = []
         for file_path in files:
             try:
                 if not os.path.exists(file_path):
@@ -448,16 +449,18 @@ class rm:
                     if recursive:
                         shutil.rmtree(file_path)
                         if verbose:
-                            print(f"Removed directory '{file_path}'")
+                            msgs.append(f"removed directory '{file_path}'")
                     else:
                         return ["ERROR", f"'{file_path}' is a directory, use -r flag"]
                 else:
                     os.remove(file_path)
                     if verbose:
-                        print(f"Removed '{file_path}'")
+                        msgs.append(f"removed '{file_path}'")
             except Exception as e:
                 if not force:
                     return ["ERROR", str(e)]
+        if verbose and msgs:
+            return ["INFO", "\n".join(msgs)]
         return ["SUCCESS"]
 
 class find:
@@ -483,7 +486,7 @@ class find:
                 try:
                     maxdepth = int(args[d_idx + 1])
                 except:
-                    return ["ERROR", "Invalid max depth"]
+                    return ["ERROR", "invalid max depth"]
         try:
             results = []
             base_depth = Path(search_path).parts.__len__()
@@ -535,7 +538,7 @@ class grep:
                     pass
             if os.path.isdir(target):
                 if not recursive:
-                    return ["ERROR", "Target is a directory, use -r"]
+                    return ["ERROR", "target is a directory, use -r"]
                 for root, dirs, files in os.walk(target):
                     for fn in files:
                         scan_file(os.path.join(root, fn))
@@ -687,7 +690,7 @@ class killall:
                     killed += 1
             except:
                 pass
-        return ["INFO", f"Killed {killed}"]
+        return ["INFO", f"killed {killed}"]
 
 class date:
     @staticmethod
@@ -697,7 +700,7 @@ class date:
             try:
                 return ["INFO", time.strftime(fmt)]
             except:
-                return ["ERROR", "Invalid format"]
+                return ["ERROR", "invalid format"]
         return ["INFO", time.strftime("%Y-%m-%d %H:%M:%S")]
 
 class whoami:
@@ -746,7 +749,7 @@ class du:
                 try:
                     maxdepth = int(args[i+1])
                 except:
-                    return ["ERROR", "Invalid depth"]
+                    return ["ERROR", "invalid depth"]
         try:
             base = Path(path)
             total_size = 0
@@ -783,7 +786,7 @@ class history:
                 try:
                     n = int(args[i+1])
                 except:
-                    return ["ERROR", "Invalid number"]
+                    return ["ERROR", "invalid number"]
         return ["INFO", "\n".join(f"{i+1}: {cmd}" for i, cmd in enumerate(command_history[-n:]))]
 
 class which:
@@ -812,7 +815,7 @@ class tree:
                 try:
                     maxdepth = int(a.split("=",1)[1])
                 except:
-                    return ["ERROR", "Invalid max depth"]
+                    return ["ERROR", "invalid max depth"]
             else:
                 path = a
         def build_tree(directory, prefix="", depth=0):
@@ -849,7 +852,7 @@ class help_cmd:
     @staticmethod
     def run(args):
         help_text = """
-Available commands
+available commands
  file & directory:
    ls/dir         - list directory contents (flags: -a -l -h -R -1 -t -S --include= --exclude=)
    cd             - change directory (cd -, cd ..)
@@ -940,7 +943,7 @@ class export:
                 os.environ[var] = value
                 return ["SUCCESS"]
             else:
-                return ["ERROR", "Invalid format. use VAR=value"]
+                return ["ERROR", "invalid format. use VAR=value"]
         except Exception as e:
             return ["ERROR", str(e)]
 
@@ -954,7 +957,7 @@ class unset:
         if var in os.environ:
             del os.environ[var]
             return ["SUCCESS"]
-        return ["WARNING", "Variable not set"]
+        return ["WARNING", "variable not set"]
 
 class env:
     @staticmethod
