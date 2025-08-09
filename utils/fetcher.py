@@ -7,18 +7,16 @@ import shlex
 # Import original commands
 from .commands.cmd import *  # noqa: F401,F403
 
-# Import blush-specific additions and extras
+# Import unified transfer commands and extras
 from .commands.blush import (
     BLUSH_COMMANDS,
     EXTRA_COMMANDS,
-    blush as blush_cmd,
     blush_settings as blush_settings_cmd,
     blush_transfer as blush_transfer_cmd,
-    blush_connect as blush_connect_cmd,
     extra as extra_cmd_handler,
 )
 
-# Base command list from original file (kept intact)
+# base command list from original file (kept intact)
 command_list = [
     "mkdir", "clear", "cls", "rmdir", "ls", "dir", "cd", "pwd", "cat", "type",
     "echo", "touch", "cp", "copy", "mv", "move", "rm", "del", "find", "grep",
@@ -29,10 +27,10 @@ command_list = [
     "checksum", "md5sum", "sha1sum", "sha256sum", "base64", "b64", "json",
     "replace", "sort", "uniq", "split", "sleep", "seq", "calc", "stat",
     "basename", "dirname", "free", "uptime", "hostname", "ip", "netstat",
-    "dns", "nslookup"
+    "dns", "nslookup", "ssf"
 ]
 
-# Add new blush commands and 100+ extra ones
+# new unified commands and 100+ extra ones
 command_list += BLUSH_COMMANDS + EXTRA_COMMANDS
 
 def ifexists(input_cmd):
@@ -46,13 +44,11 @@ def get_similar_commands(input_cmd):
     return matches
 
 def get_flags_map():
-    # Provide completion flags for new commands
     return {
         "ls": ["-a","-l","-h","-R","-1","-t","-S","--include=","--exclude="],
         "grep": ["-i","-n","-r","-E"],
-        "blush": ["set", "connect", "transfer", "status", "host", "select"],
-        "blush-transfer": ["--to=", "--ip=", "--port="],
-        "blush-connect": ["select"],
+        # unified API
+        "blush-transfer": ["set", "send", "incoming", "status", "open-inbox", "default"],
         "zip": [],
         "tar": [],
         "curl": ["-o"],
@@ -68,8 +64,8 @@ def execute(cmd):
     if not ifexists(command):
         return ["ERROR", "Command not found"]
 
-    # Original mapping
     command_map = {
+        # Original commands (omitted for brevity)
         "mkdir": mkdir.run,
         "clear": clear.run,
         "cls": cls.run,
@@ -149,14 +145,13 @@ def execute(cmd):
         "netstat": netstat.run,
         "dns": dns.run,
         "nslookup": nslookup.run,
-        # New blush commands
-        "blush": blush_cmd.run,
+        "ssf": ssf.run,
+
+        # Unified new commands
         "blush-settings": blush_settings_cmd.run,
         "blush-transfer": blush_transfer_cmd.run,
-        "blush-connect": blush_connect_cmd.run,
     }
 
-    # Map all extra command names to a single handler
     for name in EXTRA_COMMANDS:
         command_map[name] = extra_cmd_handler.run
 

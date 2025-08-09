@@ -8,9 +8,10 @@ import string
 import platform
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Set
+import subprocess
+import signal
 
 from .settings import load_full_config, save_full_config, ensure_config
-import subprocess
 
 DISCOVERY_PORT = 35888
 TRANSFER_PORT_DEFAULT = 35889
@@ -18,6 +19,25 @@ DISCOVERY_MAGIC = b"BLUSH_DISCOVER"
 DISCOVERY_REPLY_MAGIC = b"BLUSH_HERE"
 
 Device = Dict[str, str]  # {"device_id","name","ip","port"}
+
+# Ctrl+C aware cancel event
+_CANCEL_EVENT = threading.Event()
+_SIGNAL_INSTALLED = False
+_SIGNAL_LOCK = threading.Lock()
+
+def _install_sigint_handler_once():
+    global _SIGNAL_INSTALLED
+    with _SIGNAL_LOCK:
+        if _SIGNAL_INSTALLED:
+            return
+        def _handler(signum, frame):
+            _CANCEL_EVENT.set()
+        try:
+            signal.signal(signal.SIGINT, _handler)
+            _SIGNAL_INSTALLED = True
+        except Exception:
+            # Not fatal; fallback to default KeyboardInterrupt behavior
+            pass
 
 def _config_path() -> Path:
     system = platform.system()
@@ -46,13 +66,14 @@ def _save_cfg(cfg: Dict[str, any]):
 def _ensure_transfer(cfg: Dict[str, any]) -> Dict[str, any]:
     changed = False
     if "transfer" not in cfg or not isinstance(cfg["transfer"], dict):
-        cfg["transfer"] = {"ask_on_receive": False, "auto_accept_from": [], "last_selected_host": None}
+        cfg["transfer"] = {"ask_on_receive": False, "auto_accept_from": [], "last_selected_host": None, "codes": {}}
         changed = True
     else:
         t = cfg["transfer"]
         if "ask_on_receive" not in t: t["ask_on_receive"] = False; changed = True
         if "auto_accept_from" not in t: t["auto_accept_from"] = []; changed = True
         if "last_selected_host" not in t: t["last_selected_host"] = None; changed = True
+        if "codes" not in t: t["codes"] = {}; changed = True
     if changed:
         _save_cfg(cfg)
     return cfg
@@ -92,7 +113,7 @@ class RequestManager:
             self._pending[rid] = req
         try:
             print(f"\n[!] Incoming request {rid} from {their_name} ({their_id}) for '{fname}' ({size} bytes).")
-            print("[!] Use: blush incoming to approve/deny.")
+            print("[!] Use: blush-transfer incoming to approve/deny.")
         except Exception:
             pass
         return req
@@ -106,7 +127,8 @@ class RequestManager:
             req.always_trust = always_trust
             req.event.set()
             if not allow:
-                del self._pending[req_id]
+                if req.id in self._pending:
+                    del self._pending[req_id]
             return True
 
     def wait(self, req: Request, timeout: float = 180.0) -> Tuple[bool, bool]:
@@ -258,11 +280,16 @@ class HostService:
     def _handle_client(self, conn: socket.socket, addr):
         try:
             conn.settimeout(300)
+
             def recvline() -> str:
                 buf = b""
                 while b"\n" not in buf:
-                    chunk = conn.recv(1024)
-                    if not chunk: break
+                    try:
+                        chunk = conn.recv(1024)
+                    except socket.timeout:
+                        continue
+                    if not chunk:
+                        break
                     buf += chunk
                 return buf.strip().decode("utf-8", errors="ignore")
 
@@ -320,7 +347,12 @@ class HostService:
                     _save_cfg(cfg)
 
             if not allow:
-                sendline("ERR NOT_ALLOWED"); conn.close(); return
+                try: sendline("ERR NOT_ALLOWED")
+                except Exception: pass
+                try: conn.shutdown(socket.SHUT_RDWR)
+                except Exception: pass
+                conn.close()
+                return
 
             sendline("OK SEND")
 
@@ -331,7 +363,10 @@ class HostService:
             with open(dest, "wb") as f:
                 remaining = size
                 while remaining > 0:
-                    chunk = conn.recv(min(65536, remaining))
+                    try:
+                        chunk = conn.recv(min(65536, remaining))
+                    except socket.timeout:
+                        continue
                     if not chunk: break
                     f.write(chunk); remaining -= len(chunk)
             sendline("OK DONE")
@@ -408,72 +443,163 @@ def discover_devices(timeout: float = 2.0) -> List[Device]:
     return res
 
 def client_send_file(target: Device, file_path: str) -> Tuple[bool, str]:
+    """
+    Sender waits for host decision; Ctrl+C cancels cleanly.
+    Pair code is cached per device_id and reused. If cache is wrong, we prompt once and update.
+    """
     from prompt_toolkit import prompt
+
     dev_id, name, ip, port = target["device_id"], target["name"], target["ip"], int(target["port"])
     size = os.path.getsize(file_path)
-    try:
-        conn = socket.create_connection((ip, port), timeout=10)
-    except Exception as e:
-        return False, f"connect failed: {e}"
-    try:
-        def sendline(s: str):
-            conn.sendall((s + "\n").encode("utf-8"))
 
-        def recvline() -> str:
-            buf = b""
-            while b"\n" not in buf:
-                chunk = conn.recv(1024)
-                if not chunk: break
-                buf += chunk
-            return buf.strip().decode("utf-8", errors="ignore")
+    # Prepare cancel and config
+    _CANCEL_EVENT.clear()
+    _install_sigint_handler_once()
+    cfg = _ensure_transfer(_load_cfg())
+    codes = cfg["transfer"].get("codes", {})
 
-        my_id, my_name = get_device_identity()
-        sendline(f"HELLO {my_id} {my_name}")
-
-        got = recvline()
-        if got.startswith("OK"):
-            pass
-        elif got.startswith("CODE "):
-            entered = prompt(f"Enter host code for {name} ({ip}): ").strip().upper()
-            sendline(f"PAIR {entered}")
-            ok = recvline()
-            if not ok.startswith("OK"):
-                return False, "pair failed"
-        else:
-            return False, "bad handshake"
-
-        fname = os.path.basename(file_path)
-        sendline(f"FILE {fname} {size}")
-
+    def connect():
         try:
-            ack = recvline()  # waits for host approval (or rejection)
+            conn = socket.create_connection((ip, port), timeout=10)
+            conn.settimeout(0.5)  # short timeouts to honor Ctrl+C quickly
+            return conn
+        except Exception as e:
+            return None
+
+    def recvline(conn: socket.socket) -> str:
+        buf = b""
+        while b"\n" not in buf:
+            if _CANCEL_EVENT.is_set():
+                try:
+                    conn.sendall(b"CANCEL\n")
+                except Exception:
+                    pass
+                raise KeyboardInterrupt()
+            try:
+                chunk = conn.recv(1024)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            buf += chunk
+        return buf.strip().decode("utf-8", errors="ignore")
+
+    def sendline(conn: socket.socket, s: str):
+        conn.sendall((s + "\n").encode("utf-8"))
+
+    try:
+        # 1) Connect and pair (with one retry if cached code fails)
+        for attempt in range(2):
+            conn = connect()
+            if not conn:
+                return False, f"connect failed: could not reach {ip}:{port}"
+
+            try:
+                my_id, my_name = get_device_identity()
+                sendline(conn, f"HELLO {my_id} {my_name}")
+
+                got = recvline(conn)
+                if got.startswith("OK"):
+                    # already paired this host session
+                    break
+
+                if got.startswith("CODE "):
+                    # try cached code first (only first attempt)
+                    use_cached = (attempt == 0 and dev_id in codes and codes[dev_id])
+                    if use_cached:
+                        sendline(conn, f"PAIR {codes[dev_id]}")
+                        ok = recvline(conn)
+                        if ok.startswith("OK"):
+                            break  # paired
+                        # cached code invalid -> drop and retry with prompt
+                        try:
+                            del codes[dev_id]
+                            cfg["transfer"]["codes"] = codes
+                            _save_cfg(cfg)
+                        except Exception:
+                            pass
+                        # reconnect for next attempt
+                        try: conn.close()
+                        except Exception: pass
+                        continue
+
+                    # prompt for code and persist on success
+                    entered = prompt(f"Enter host code for {name} ({ip}): ").strip().upper()
+                    sendline(conn, f"PAIR {entered}")
+                    ok = recvline(conn)
+                    if not ok.startswith("OK"):
+                        try: conn.close()
+                        except Exception: pass
+                        return False, "pair failed"
+                    # save code
+                    codes[dev_id] = entered
+                    cfg["transfer"]["codes"] = codes
+                    _save_cfg(cfg)
+                    break
+                else:
+                    try: conn.close()
+                    except Exception: pass
+                    return False, "bad handshake"
+            except KeyboardInterrupt:
+                try:
+                    sendline(conn, "CANCEL")
+                except Exception:
+                    pass
+                try: conn.close()
+                except Exception: pass
+                return False, "sender cancelled"
+
+        # 2) Send file meta and wait for approval
+        try:
+            fname = os.path.basename(file_path)
+            sendline(conn, f"FILE {fname} {size}")
+            ack = recvline(conn)  # waits for host approval (or rejection)
+            if not ack.startswith("OK"):
+                try: conn.close()
+                except Exception: pass
+                return False, "transfer rejected by host (not accepted, denied, or timed out)"
         except KeyboardInterrupt:
             try:
-                sendline("CANCEL")
+                sendline(conn, "CANCEL")
             except Exception:
                 pass
+            try: conn.close()
+            except Exception: pass
             return False, "sender cancelled"
 
-        if not ack.startswith("OK"):
-            return False, "transfer rejected by host (not accepted, denied, or timed out)"
-
-        with open(file_path, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk: break
-                conn.sendall(chunk)
-        done = recvline()
-        if not done.startswith("OK"):
-            return False, "transfer failed"
-        return True, f"sent {fname} ({size} bytes) to {name} [{ip}]"
-    except KeyboardInterrupt:
+        # 3) Stream bytes
         try:
-            sendline("CANCEL")
-        except Exception:
-            pass
-        return False, "sender cancelled"
+            with open(file_path, "rb") as f:
+                while True:
+                    if _CANCEL_EVENT.is_set():
+                        try:
+                            sendline(conn, "CANCEL")
+                        except Exception:
+                            pass
+                        try: conn.close()
+                        except Exception: pass
+                        return False, "sender cancelled"
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    conn.sendall(chunk)
+            done = recvline(conn)
+            if not done.startswith("OK"):
+                try: conn.close()
+                except Exception: pass
+                return False, "transfer failed"
+            try: conn.close()
+            except Exception: pass
+            return True, f"sent {fname} ({size} bytes) to {name} [{ip}]"
+        except KeyboardInterrupt:
+            try:
+                sendline(conn, "CANCEL")
+            except Exception:
+                pass
+            try: conn.close()
+            except Exception: pass
+            return False, "sender cancelled"
     except Exception as e:
-        return False, f"send failed: {e}"
-    finally:
         try: conn.close()
         except Exception: pass
+        return False, f"send failed: {e}"

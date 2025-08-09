@@ -17,6 +17,15 @@ import getpass
 import json
 from pathlib import Path
 from typing import List
+import colorama
+
+prefixes = None
+
+def get_prefixes_dynamic():
+    if prefixes is None:
+        from main import get_prefixes
+        prefixes = get_prefixes()
+    return prefixes
 
 current_dir = os.getcwd()
 previous_dir = current_dir
@@ -903,6 +912,7 @@ available commands
    ip             - show addresses
    netstat        - connections
    dns/nslookup   - resolve name
+   blush-transfer - send files
 
  utils:
    echo           - print text
@@ -1576,3 +1586,315 @@ class dirname:
         if validation:
             return validation
         return ["INFO", os.path.dirname(args[1])]
+
+class ssf:
+    @staticmethod
+    def run(args=None):
+        if args is None:
+            args = []
+        from main import get_prefixes
+        prefixes = get_prefixes()
+        
+        RESET = '\033[0m'
+        BOLD = '\033[1m'
+        
+        CYAN = '\033[96m'
+        GREEN = '\033[92m'
+        YELLOW = '\033[93m'
+        MAGENTA = '\033[95m'
+        BLUE = '\033[94m'
+        RED = '\033[91m'
+        WHITE = '\033[97m'
+        GRAY = '\033[90m'
+        
+        BG_CYAN = '\033[46m'
+        BG_GREEN = '\033[42m'
+        BG_MAGENTA = '\033[45m'
+        BG_BLUE = '\033[44m'
+        
+        print(f"{prefixes['think_prefix']} Fetching System Specifications", end='', flush=True)
+
+        import platform, psutil, sys, socket, os, time, subprocess, requests
+
+        def get_all_gpus():
+            gpus = []
+            try:
+                if platform.system() == "Windows":
+                    cmd = ['powershell', '-Command',
+                           "Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, CurrentRefreshRate, DriverVersion, Status"]
+                    output = subprocess.check_output(cmd, text=True).strip()
+                    current_gpu = {}
+                    for line in output.split('\n'):
+                        line = line.strip()
+                        if line.startswith('Name'):
+                            if current_gpu:
+                                gpus.append(current_gpu)
+                            name = line.split(':', 1)[1].strip() if ':' in line else ''
+                            current_gpu = {'name': name, 'vram': '', 'driver': '', 'status': ''}
+                        elif line.startswith('AdapterRAM'):
+                            if current_gpu:
+                                try:
+                                    ram = line.split(':', 1)[1].strip() if ':' in line else '0'
+                                    if ram and ram != '0':
+                                        ram_int = int(ram)
+                                        # spróbuj tak: jeśli ram_int jest podejrzanie małe, to pomnóż
+                                        if ram_int < 1e9:
+                                            # wtedy prawdopodobnie jest w bajtach, dzielimy na MB, potem na GB
+                                            ram_gb = ram_int / (1024**2) / 1024
+                                        else:
+                                            ram_gb = ram_int / (1024**3)
+                                        current_gpu['vram'] = f"{ram_gb:.1f} GB"
+                                except:
+                                    pass
+                        elif line.startswith('DriverVersion'):
+                            if current_gpu:
+                                current_gpu['driver'] = line.split(':', 1)[1].strip() if ':' in line else ''
+                        elif line.startswith('Status'):
+                            if current_gpu:
+                                current_gpu['status'] = line.split(':', 1)[1].strip() if ':' in line else ''
+                    if current_gpu:
+                        gpus.append(current_gpu)
+                    
+                    dedicated_gpus = []
+                    integrated_gpus = []
+                    for gpu in gpus:
+                        name_lower = gpu['name'].lower()
+                        if any(x in name_lower for x in ['nvidia', 'geforce', 'rtx', 'gtx', 'radeon rx', 'arc']):
+                            dedicated_gpus.append(gpu)
+                        elif gpu['name'] and gpu['name'] != 'N/A':
+                            integrated_gpus.append(gpu)
+                    
+                    return dedicated_gpus if dedicated_gpus else integrated_gpus
+                else:
+                    return []
+            except Exception:
+                return []
+
+        def get_cpu_expanded():
+            info = []
+            try:
+                if platform.system() == "Windows":
+                    import wmi
+                    c = wmi.WMI()
+                    for cpu in c.Win32_Processor():
+                        info.append(("Name", cpu.Name))
+                        info.append(("Manufacturer", cpu.Manufacturer))
+                        info.append(("Number of Cores", cpu.NumberOfCores))
+                        info.append(("Number of Logical Threads", cpu.NumberOfLogicalProcessors))
+                        info.append(("Max Clock Speed", f"{cpu.MaxClockSpeed} MHz"))
+                        info.append(("L2 Cache Size", f"{cpu.L2CacheSize} KB"))
+                        info.append(("L3 Cache Size", f"{cpu.L3CacheSize} KB"))
+                else:
+                    info.append(("Processor", platform.processor()))
+                    info.append(("CPU Count (Logical)", psutil.cpu_count(logical=True)))
+                    info.append(("CPU Count (Physical)", psutil.cpu_count(logical=False)))
+                    cpu_freq = psutil.cpu_freq()
+                    if cpu_freq:
+                        info.append(("Current Frequency", f"{cpu_freq.current:.2f} MHz"))
+                        info.append(("Min Frequency", f"{cpu_freq.min:.2f} MHz"))
+                        info.append(("Max Frequency", f"{cpu_freq.max:.2f} MHz"))
+                    info.append(("CPU Percent per CPU", psutil.cpu_percent(interval=1, percpu=True)))
+            except Exception:
+                info.append(("CPU Expanded Info Not Available", ""))
+            return info
+
+        def get_memory_expanded():
+            vm = psutil.virtual_memory()
+            sm = psutil.swap_memory()
+            return [
+                ("Total", f"{vm.total // (1024**2)} MB"),
+                ("Available", f"{vm.available // (1024**2)} MB"),
+                ("Used", f"{vm.used // (1024**2)} MB"),
+                ("Percentage Used", f"{vm.percent}%"),
+                ("Swap Total", f"{sm.total // (1024**2)} MB"),
+                ("Swap Used", f"{sm.used // (1024**2)} MB"),
+                ("Swap Free", f"{sm.free // (1024**2)} MB"),
+                ("Swap Percent", f"{sm.percent}%")
+            ]
+
+        def get_disk_expanded():
+            partitions = psutil.disk_partitions()
+            result = []
+            for p in partitions:
+                try:
+                    usage = psutil.disk_usage(p.mountpoint)
+                    result.append((
+                        f"{p.device}",
+                        [
+                            ("FS", p.fstype),
+                            ("Total", f"{usage.total // (1024**3)} GB"),
+                            ("Used", f"{usage.used // (1024**3)} GB"),
+                            ("Free", f"{usage.free // (1024**3)} GB"),
+                            ("Use%", f"{usage.percent}%")
+                        ]
+                    ))
+                except Exception:
+                    continue
+            return result
+
+        def get_network_expanded():
+            addrs = psutil.net_if_addrs()
+            stats = psutil.net_if_stats()
+            io = psutil.net_io_counters(pernic=True)
+            result = []
+            
+            for iface, addrs_list in addrs.items():
+                if iface in stats and stats[iface].isup:
+                    iface_data = []
+                    s = stats[iface]
+                    iface_data.append(("Status", "Active"))
+                    iface_data.append(("Speed", f"{s.speed} Mbps"))
+                    
+                    for addr in addrs_list:
+                        if addr.family.name == 'AF_INET':
+                            iface_data.append(("IPv4", addr.address))
+                        elif addr.family.name == 'AF_INET6':
+                            iface_data.append(("IPv6", addr.address))
+                    
+                    if iface in io:
+                        io_counters = io[iface]
+                        sent_mb = io_counters.bytes_sent / (1024**2)
+                        recv_mb = io_counters.bytes_recv / (1024**2)
+                        iface_data.append(("Data Sent", f"{sent_mb:.2f} MB"))
+                        iface_data.append(("Data Received", f"{recv_mb:.2f} MB"))
+                    
+                    result.append((iface, iface_data))
+            return result
+
+        def get_system_expanded():
+            uptime_sec = int(time.time() - psutil.boot_time())
+            hours = uptime_sec // 3600
+            minutes = (uptime_sec // 60) % 60
+            seconds = uptime_sec % 60
+            
+            version_info = platform.version()
+            short_version = version_info.split('.')[2] if len(version_info.split('.')) > 2 else version_info
+            
+            return [
+                ("System", platform.system()),
+                ("Node", platform.node()),
+                ("Release", f"Windows {platform.release()}"),
+                ("Build", short_version),
+                ("Architecture", platform.machine()),
+                ("Boot Time", time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(psutil.boot_time()))),
+                ("Uptime", f"{hours}h {minutes}m {seconds}s"),
+                ("User", os.getlogin()),
+            ]
+
+        def get_real_ip():
+            try:
+                resp = requests.get("https://api.ipify.org", timeout=5)
+                if resp.status_code == 200:
+                    return resp.text.strip()
+            except Exception:
+                return "N/A"
+            return "N/A"
+
+        def print_header(title, emoji):
+            print(f"\n{CYAN}{'─' * 60}{RESET}")
+            print(f"{BOLD}{WHITE}[ {emoji} {title} ]{RESET}")
+            print(f"{CYAN}{'─' * 60}{RESET}")
+
+        def print_item(emoji, key, value, key_color=YELLOW, val_color=GREEN):
+            print(f"[{emoji}] {key_color}{key:<28}{RESET}: {val_color}{value}{RESET}")
+
+        expanded = '-ex' in args or '--expanded' in args
+
+        cpu_name = 'Unknown Processor'
+        try:
+            if platform.system() == "Windows":
+                import wmi
+                c = wmi.WMI()
+                processors = c.Win32_Processor()
+                if processors and processors[0].Name:
+                    cpu_name = processors[0].Name.strip()
+            else:
+                cpu_name = platform.processor() or 'Unknown Processor'
+        except Exception:
+            cpu_name = platform.processor() or 'Unknown Processor'
+
+        total_memory_gb = psutil.virtual_memory().total / (1024**3)
+        mem_used_gb = psutil.virtual_memory().used / (1024**3)
+        mem_percent = psutil.virtual_memory().percent
+
+        disk = psutil.disk_usage('/')
+        disk_total_gb = disk.total / (1024**3)
+        disk_used_gb = disk.used / (1024**3)
+        disk_percent = disk.percent
+
+        ip_addr_local = 'N/A'
+        try:
+            hostname = socket.gethostname()
+            ip_addr_local = socket.gethostbyname(hostname)
+        except Exception:
+            pass
+
+        gpus = get_all_gpus()
+        gpu_display = gpus[0]['name'] if gpus else 'No GPU detected'
+
+        print(f"\n{BOLD}{MAGENTA}╔══════════════════════════════════════════════════════════╗{RESET}")
+        print(f"{BOLD}{MAGENTA}║{RESET}  {BOLD}{WHITE}                SYSTEM SPECIFICATIONS                 {RESET}  {BOLD}{MAGENTA}║{RESET}")
+        print(f"{BOLD}{MAGENTA}╚══════════════════════════════════════════════════════════╝{RESET}")
+
+        print(f"\n{CYAN}🧠 {BOLD}{GREEN}{cpu_name}{RESET}")
+        print(f"{MAGENTA}🧮 Memory: {BOLD}{YELLOW}{mem_used_gb:.2f}GB / {total_memory_gb:.2f}GB ({mem_percent}%){RESET}")
+        print(f"{BLUE}💾 Disk: {BOLD}{YELLOW}{disk_used_gb:.2f}GB / {disk_total_gb:.2f}GB ({disk_percent}%){RESET}")
+        print(f"{GREEN}🌐 Local IP: {BOLD}{CYAN}{ip_addr_local}{RESET}")
+        print(f"{RED}🎮 GPU: {BOLD}{MAGENTA}{gpu_display}{RESET}")
+
+        if expanded:
+            print_header("CPU", "🧠")
+            cpu_info = get_cpu_expanded()
+            for key, val in cpu_info:
+                if "Threads" in key or "Logical" in key:
+                    print_item("🧠", key, val, CYAN, YELLOW)
+                else:
+                    print_item("🧠", key, val, CYAN, GREEN)
+
+            print_header("MEMORY", "🧮")
+            mem_info = get_memory_expanded()
+            for key, val in mem_info:
+                color = YELLOW if "Used" in key or "Percent" in key else GREEN
+                print_item("🧮", key, val, MAGENTA, color)
+
+            disk_info = get_disk_expanded()
+            for device, details in disk_info:
+                print_header(f"DISK {device}", "💾")
+                for key, val in details:
+                    color = RED if key == "Use%" and float(val.strip('%')) > 80 else GREEN
+                    print_item("💾", key, val, BLUE, color)
+
+            net_info = get_network_expanded()
+            if net_info:
+                print_header("NETWORK", "🌐")
+                for iface, details in net_info:
+                    print(f"\n{BOLD}{YELLOW}[📡] {iface}{RESET}")
+                    for key, val in details:
+                        print_item("  📡", key, val, CYAN, GREEN)
+
+            if gpus:
+                print_header("GPU", "🎮")
+                for i, gpu in enumerate(gpus, 1):
+                    if len(gpus) > 1:
+                        print(f"\n{BOLD}{YELLOW}GPU #{i}{RESET}")
+                    print_item("🎮", "Name", gpu['name'], RED, MAGENTA)
+                    if gpu.get('vram'):
+                        print_item("🎮", "VRAM", gpu['vram'], RED, CYAN)
+                    if gpu.get('driver'):
+                        print_item("🎮", "Driver Version", gpu['driver'], RED, WHITE)
+                    if gpu.get('status'):
+                        status_color = GREEN if gpu['status'].lower() == 'ok' else YELLOW
+                        print_item("🎮", "Status", gpu['status'], RED, status_color)
+
+            print_header("SYSTEM", "💻")
+            sys_info = get_system_expanded()
+            for key, val in sys_info:
+                print_item("💻", key, val, GRAY, WHITE)
+
+            print_header("PUBLIC IP", "🌍")
+            public_ip = get_real_ip()
+            print_item("🌍", "External IP", public_ip, YELLOW, CYAN)
+
+        print(f"\n{CYAN}{'═' * 60}{RESET}")
+        print(f"{BOLD}{GREEN}[✓] System scan complete!{RESET}")
+        print(f"{CYAN}{'═' * 60}{RESET}\n")

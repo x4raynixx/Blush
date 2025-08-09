@@ -6,13 +6,14 @@ import platform
 import shlex
 import json
 
-# Local imports
 from utils import fetcher
 from utils.settings import load_full_config, ensure_config, get_blush_paths
 from utils.colors import get_color
 
-# auto-install list (kept minimal and cross-platform)
-importlist = ["colorama", "wcwidth", "prompt_toolkit", "psutil"]
+import colorama
+import wcwidth
+import prompt_toolkit
+import psutil
 
 def clear_terminal():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -28,43 +29,9 @@ def delete_restart_script():
         RESTART_SCRIPT.unlink()
 
 def prepare():
-    # Ensure temp and config exist
     os.makedirs(TEMP_PATH, exist_ok=True)
     ensure_config(BLUSH_CONFIG_PATH)
     delete_restart_script()
-
-    missing_modules = []
-    for module in importlist:
-        try:
-            globals()[module] = __import__(module)
-        except ImportError:
-            missing_modules.append(module)
-
-    if missing_modules:
-        print("[*] Missing modules: " + ", ".join(missing_modules))
-        for module in missing_modules:
-            print(f"[*] Installing {module}...")
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", module],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                globals()[module] = __import__(module)
-                print(f"[+] {module} installed")
-            except Exception as e:
-                print(f"[!] Failed to install {module}: {e}")
-                sys.exit(1)
-
-        restart_content = (
-            f"@echo off\ntimeout /t 1 >nul\n\"{sys.executable}\" \"{__file__}\"\ndel \"%~f0\"\n"
-            if os.name == "nt" else
-            f"#!/bin/bash\nsleep 1\n\"{sys.executable}\" \"{__file__}\"\nrm -- \"$0\"\n"
-        )
-        RESTART_SCRIPT.write_text(restart_content)
-        if os.name != "nt":
-            RESTART_SCRIPT.chmod(0o755)
-            subprocess.Popen(["bash", str(RESTART_SCRIPT)])
-        else:
-            os.startfile(RESTART_SCRIPT)
-        sys.exit(0)
 
 load_banner = r"""$$$$$$$\  $$\       $$\   $$\  $$$$$$\  $$\   $$\
 $$  __$$\ $$ |      $$ |  $$ |$$  __$$\ $$ |  $$ |
@@ -76,7 +43,7 @@ $$ |  $$ |$$$$$$$$\ \$$$$$$  |$$ |  $$ |$$ |  $$ |
 \__|  \__|\________| \______/ \__|  \__|\__|  \__|"""
 
 def display_banner():
-    col = globals().get("colorama")
+    col = colorama
     cfg = load_full_config(BLUSH_CONFIG_PATH)
     colors = {
         "blush": get_color(cfg.get("blush_color", "MAGENTA")),
@@ -91,7 +58,6 @@ def display_banner():
     print(get_color("BLUE") + f"{blush_prefix} Blush - Fast & Optimized Shell" + col.Style.RESET_ALL)
     print("")
 
-# simple sentence-capitalizer per line
 def _format_lines(text: str) -> str:
     lines = text.splitlines()
     out = []
@@ -194,7 +160,7 @@ def input_loop():
             break
 
 def execute_command(cmd):
-    col = globals().get("colorama")
+    col = colorama
     if cmd.startswith("!"):
         mod_cmd = cmd[1:].strip()
         if not mod_cmd:
@@ -247,7 +213,7 @@ def handle_response(response):
 
 def get_prefixes():
     import wcwidth
-    col = globals().get("colorama")
+    col = colorama
     cfg = load_full_config(BLUSH_CONFIG_PATH)
 
     def pad_display(text, width=2):
@@ -277,7 +243,7 @@ def get_prefixes():
 
 def main():
     prepare()
-    col = globals().get("colorama")
+    col = colorama
     col.init(autoreset=True, strip=False, convert=True)
     prefixes = get_prefixes()
     global blush_prefix, success_prefix, warning_prefix, error_prefix, think_prefix, cin_prefix

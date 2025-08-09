@@ -15,7 +15,8 @@ from ..transfer import (
 )
 from ..colors import list_supported_colors
 
-BLUSH_COMMANDS = ["blush", "blush-settings", "blush-transfer", "blush-connect"]
+BLUSH_COMMANDS = ["blush-transfer", "blush-settings"]
+
 EXTRA_COMMANDS: List[str] = [
     "lower", "upper", "titlecase", "reverse", "length", "trim", "ltrim", "rtrim",
     "snake", "kebab", "camel", "rot13", "url-encode", "url-decode",
@@ -40,7 +41,20 @@ def _load_cfg() -> Dict[str, Any]:
     from ..settings import load_full_config, ensure_config
     cfg_path = _config_path()
     ensure_config(cfg_path)
-    return load_full_config(cfg_path)
+    cfg = load_full_config(cfg_path)
+    # self-heal transfer section
+    if "transfer" not in cfg or not isinstance(cfg["transfer"], dict):
+        cfg["transfer"] = {}
+    t = cfg["transfer"]
+    t.setdefault("ask_on_receive", False)
+    t.setdefault("auto_accept_from", [])
+    t.setdefault("last_selected_host", None)
+    t.setdefault("codes", {})
+    save = False
+    if "transfer" not in cfg: save = True
+    if save:
+        _save_cfg(cfg)
+    return cfg
 
 def _save_cfg(cfg: Dict[str, Any]):
     from ..settings import save_full_config, ensure_config
@@ -48,58 +62,68 @@ def _save_cfg(cfg: Dict[str, Any]):
     ensure_config(cfg_path)
     save_full_config(cfg_path, cfg)
 
-def _ensure_transfer(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    changed = False
-    if "transfer" not in cfg or not isinstance(cfg["transfer"], dict):
-        cfg["transfer"] = {"ask_on_receive": False, "auto_accept_from": [], "last_selected_host": None}
-        changed = True
-    else:
-        t = cfg["transfer"]
-        if "ask_on_receive" not in t: t["ask_on_receive"] = False; changed = True
-        if "auto_accept_from" not in t: t["auto_accept_from"] = []; changed = True
-        if "last_selected_host" not in t: t["last_selected_host"] = None; changed = True
-    if changed:
-        _save_cfg(cfg)
-    return cfg
-
 def _inbox_path() -> Path:
-    # mirror utils.settings path logic
     system = platform.system()
     if system == "Windows":
         return Path(os.environ.get("USERPROFILE")) / "AppData" / "Local" / ".blush" / "inbox"
     else:
         return Path(os.environ.get("HOME")) / ".blush" / "inbox"
 
-class blush:
+class blush_transfer:
     @staticmethod
     def run(args: List[str]):
-        # blush set host | blush host stop | blush connect select | blush transfer <file> | blush incoming | blush accept <id> [--always] | blush deny <id> | blush open-inbox | blush status
+        # blush-transfer [set [host|default|0]] | blush-transfer set (select) | blush-transfer send <file> | blush-transfer incoming | blush-transfer status | blush-transfer open-inbox
         if len(args) == 1:
-            return ["INFO", "Usage: blush set host | blush host stop | blush connect select | blush transfer <file> | blush incoming | blush accept <id> [--always] | blush deny <id> | blush open-inbox | blush status"]
+            return ["INFO", "Usage: blush-transfer set [host|default|0] | blush-transfer set (select) | blush-transfer send <file> | blush-transfer incoming | blush-transfer status | blush-transfer open-inbox"]
 
         sub = args[1].lower()
 
-        # Start/stop host
-        if sub == "set" and len(args) >= 3 and args[2].lower() == "host":
-            host = start_host()
-            msg = f"Host enabled on port {host.port}.\nDevice ID: {host.device_id}\nPair Code: {host.pair_code}\nWaiting for connections...\nUse 'blush incoming' to review pending requests."
-            return ["INFO", msg]
+        # Settings / control
+        if sub == "set":
+            # sub-modes:
+            #   - host -> start host
+            #   - default or 0 -> clear selection
+            #   - no arg -> discover & select host as target
+            if len(args) >= 3:
+                mode = args[2].lower()
+                if mode == "host":
+                    host = start_host()
+                    msg = f"Host enabled on port {host.port}.\nDevice ID: {host.device_id}\nPair Code: {host.pair_code}\nWaiting for connections...\nUse 'blush-transfer incoming' to review pending requests."
+                    return ["INFO", msg]
+                if mode in ("default", "0"):
+                    cfg = _load_cfg()
+                    cfg["transfer"]["last_selected_host"] = None
+                    _save_cfg(cfg)
+                    return ["INFO", "Selection cleared"]
+                return ["WARNING", "Unknown set option. Use: host | default | 0"]
 
-        if (sub == "host" and len(args) >= 3 and args[2].lower() == "stop") or (sub == "stop" and len(args) >= 3 and args[2].lower() == "host"):
-            ok = stop_host()
-            return ["INFO", "Host stopped"] if ok else ["WARNING", "Host not running"]
+            # No extra arg -> select host to send to
+            devs = discover_devices(timeout=2.0)
+            if not devs:
+                return ["WARNING", "No devices discovered on LAN"]
+            items = [(str(i), f"{d['name']} [{d['ip']}:{d['port']}] ({d['device_id']})") for i, d in enumerate(devs)]
+            choice = radiolist_dialog(title="Blush Transfer", text="Select a host to send to:", values=items).run()
+            if choice is None:
+                return ["WARNING", "Selection aborted"]
+            sel = devs[int(choice)]
+            cfg = _load_cfg()
+            cfg["transfer"]["last_selected_host"] = sel
+            _save_cfg(cfg)
+            return ["INFO", f"Selected {sel['name']} [{sel['ip']}:{sel['port']}]"]
 
-        # Status
-        if sub == "status":
-            host = get_active_host()
-            cfg = _ensure_transfer(_load_cfg())
-            ask = cfg["transfer"].get("ask_on_receive", False)
-            last = cfg["transfer"].get("last_selected_host")
-            if host and host.running:
-                return ["INFO", f"Host: ON port={host.port}\nDevice: {host.device_id}\nPair Code: {host.pair_code}\nAsk on receive: {ask}\nLast target: {last or '-'}"]
-            return ["INFO", f"Host: OFF\nAsk on receive: {ask}\nLast target: {last or '-'}"]
+        if sub == "send":
+            if len(args) < 3:
+                return ["WARNING", "Usage: blush-transfer send <file>"]
+            file_path = args[2]
+            if not os.path.isfile(file_path):
+                return ["ERROR", "file not found"]
+            cfg = _load_cfg()
+            tgt = cfg["transfer"].get("last_selected_host")
+            if not tgt:
+                return ["WARNING", "No host selected. Use: blush-transfer set"]
+            ok, msg = client_send_file(tgt, file_path)
+            return ["INFO", msg] if ok else ["ERROR", msg]
 
-        # Incoming queue (interactive)
         if sub == "incoming":
             try:
                 while True:
@@ -142,7 +166,6 @@ class blush:
                         else:
                             ok = deny_request(req_id)
                             print("Denied" if ok else "Invalid request id")
-                        # loop continues; host will receive if accepted
                         continue
                     else:
                         print("Invalid input")
@@ -151,56 +174,27 @@ class blush:
                 pass
             return ["INFO", "Incoming review closed"]
 
-        if sub == "accept" and len(args) >= 3:
-            rid = args[2]
-            always = ("--always" in args)
-            ok = accept_request(rid, always_trust=always)
-            return ["INFO", ("Accepted" + (" and trusted" if always else ""))] if ok else ["ERROR", "Invalid request id"]
-
-        if sub == "deny" and len(args) >= 3:
-            rid = args[2]
-            ok = deny_request(rid)
-            return ["INFO", "Denied"] if ok else ["ERROR", "Invalid request id"]
-
         if sub == "open-inbox":
             inbox = _inbox_path()
             inbox.mkdir(parents=True, exist_ok=True)
             open_folder(inbox)
             return ["SUCCESS"]
 
-        # Discover/select target
-        if sub == "connect" and len(args) >= 3 and args[2].lower() == "select":
-            devs = discover_devices(timeout=2.0)
-            if not devs:
-                return ["WARNING", "No devices discovered on LAN"]
-            items = [(str(i), f"{d['name']} [{d['ip']}:{d['port']}] ({d['device_id']})") for i, d in enumerate(devs)]
-            choice = radiolist_dialog(title="Blush Connect", text="Select a host:", values=items).run()
-            if choice is None:
-                return ["WARNING", "Selection aborted"]
-            sel = devs[int(choice)]
-            cfg = _ensure_transfer(_load_cfg())
-            cfg["transfer"]["last_selected_host"] = sel
-            _save_cfg(cfg)
-            return ["INFO", f"Selected {sel['name']} [{sel['ip']}:{sel['port']}]"]
+        if sub == "status":
+            host = get_active_host()
+            cfg = _load_cfg()
+            ask = cfg["transfer"].get("ask_on_receive", False)
+            last = cfg["transfer"].get("last_selected_host")
+            if host and host.running:
+                return ["INFO", f"Host: ON port={host.port}\nDevice: {host.device_id}\nPair Code: {host.pair_code}\nAsk on receive: {ask}\nSelected target: {last or '-'}"]
+            return ["INFO", f"Host: OFF\nAsk on receive: {ask}\nSelected target: {last or '-'}"]
 
-        # Send file
-        if sub == "transfer" and len(args) >= 3:
-            file_path = args[2]
-            if not os.path.isfile(file_path):
-                return ["ERROR", "file not found"]
-            cfg = _ensure_transfer(_load_cfg())
-            tgt = cfg["transfer"].get("last_selected_host")
-            if not tgt:
-                return ["WARNING", "No host selected. Use: blush connect select"]
-            ok, msg = client_send_file(tgt, file_path)
-            return ["INFO", msg] if ok else ["ERROR", msg]
-
-        return ["WARNING", "Unknown blush subcommand"]
+        return ["WARNING", "Unknown blush-transfer subcommand"]
 
 class blush_settings:
     @staticmethod
     def run(args: List[str]):
-        cfg = _ensure_transfer(_load_cfg())
+        cfg = _load_cfg()
         colors = list_supported_colors()
         current = {
             "blush": cfg.get("blush_color", "MAGENTA"),
@@ -237,24 +231,10 @@ class blush_settings:
         _save_cfg(cfg)
         return ["INFO", "Settings saved"]
 
-class blush_transfer:
-    @staticmethod
-    def run(args: List[str]):
-        if len(args) < 2:
-            return ["WARNING", "Usage: blush-transfer <file>"]
-        return blush.run(["blush", "transfer", args[1]])
-
-class blush_connect:
-    @staticmethod
-    def run(args: List[str]):
-        if len(args) >= 2 and args[1].lower() == "select":
-            return blush.run(["blush", "connect", "select"])
-        return ["WARNING", "Usage: blush-connect select"]
-
 class extra:
     @staticmethod
     def run(args: List[str]):
-        # unchanged utility commands (truncated for brevity)
+        # Same utility commands as before (unchanged)
         import re, time, base64, binascii, random, hashlib, socket, psutil, textwrap, urllib.parse, uuid as uuidlib
         name = args[0].lower()
         rest = args[1:]
@@ -360,7 +340,7 @@ class extra:
             import math
             if not rest: return ["WARNING", "Usage: factorial n"]
             try:
-                n = int(rest[0]); 
+                n = int(rest[0]);
                 if n < 0 or n > 1000: return ["ERROR", "n out of range"]
                 return ["INFO", str(math.factorial(n))]
             except: return ["ERROR", "invalid n"]
